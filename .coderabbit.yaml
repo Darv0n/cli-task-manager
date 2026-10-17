@@ -1,0 +1,61 @@
+language: "en-US"
+tone_instructions: "Be direct and actionable. Flag blocking issues prominently."
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+
+  path_filters:
+    - "!**/*.lock"
+    - "!**/__pycache__/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/coverage/**"
+    - "!**/*.egg-info/**"
+
+  path_instructions:
+    - path: "src/task_manager/contracts.py"
+      instructions: |
+        CRITICAL — Single source of truth for all types and protocols.
+        Changes here ripple through the entire codebase.
+        Verify backward compatibility of any protocol changes.
+        All storage backends must satisfy StorageBackend protocol.
+    - path: "src/task_manager/storage/**"
+      instructions: |
+        Storage backends must implement the StorageBackend protocol from contracts.py.
+        JSON backend: verify atomic writes (write-then-rename).
+        SQLite backend: verify WAL mode and proper indexing.
+        No direct imports between backends — they should be interchangeable.
+    - path: "src/task_manager/cli/commands/**"
+      instructions: |
+        CLI commands use Typer. Check for consistent error handling via errors.py.
+        Rich output formatting should go through output.py, not inline.
+    - path: "src/task_manager/plugins/**"
+      instructions: |
+        Plugin system — hook registry and dynamic loader.
+        Plugins must not bypass the contracts.py protocol.
+    - path: "tests/**"
+      instructions: |
+        Mock data allowed. Check for meaningful assertions.
+        Storage protocol compliance tests must cover both JSON and SQLite backends.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - "[skip-review]"
+      - "WIP"
+
+  tools:
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    shellcheck:
+      enabled: true
+
+chat:
+  auto_reply: true

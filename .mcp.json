@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "sqlite-tasks": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-server-sqlite-npx",
+        "--db-path",
+        "~/.task-manager/data/tasks.db"
+      ],
+      "description": "Read/write access to cli-task-manager SQLite backend. Exposes task tables, schema inspection, and raw SQL queries for MCP-aware agents."
+    }
+  }
+}

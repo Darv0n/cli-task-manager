@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "command": "bash -c 'INPUT=$(cat); MSG=$(echo \"$INPUT\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get(\\\"message\\\",\\\"\\\"))\" 2>/dev/null); if echo \"$MSG\" | grep -qiE \"add.?task|create.?task|new.?task|capture|task.?add\"; then echo \"[TASK] Task creation detected. Consider /add-task for guided creation.\"; elif echo \"$MSG\" | grep -qiE \"list.?tasks?|show.?my.?tasks|what.?s.?open|filter.?tasks|tasks?.?by.?priority\"; then echo \"[TASK] Task query detected. Consider /list-tasks or /task-dashboard.\"; elif echo \"$MSG\" | grep -qiE \"mark.?done|complete.?task|finish.?task|close.?task\"; then echo \"[TASK] Task completion detected. Consider /complete-task.\"; elif echo \"$MSG\" | grep -qiE \"sync.?github|push.?to.?issues|github.?issue\"; then echo \"[TASK] GitHub sync detected. Consider /sync-github.\"; elif echo \"$MSG\" | grep -qiE \"add.?backend|create.?backend|storage.?backend\"; then echo \"[TASK] Backend creation detected. Use /add-backend to spawn backend-architect.\"; elif echo \"$MSG\" | grep -qiE \"create.?plugin|add.?plugin|write.?hook.?plugin|new.?integration\"; then echo \"[TASK] Plugin creation detected. Use /add-plugin to spawn plugin-architect.\"; elif echo \"$MSG\" | grep -qiE \"run.?checks|verify|lint.?and.?test|pre.?commit\"; then echo \"[TASK] Quality check detected. Consider /run-checks.\"; elif echo \"$MSG\" | grep -qiE \"dashboard|triage|daily.?review|what.?should.?I.?work\"; then echo \"[TASK] Dashboard request detected. Consider /task-dashboard.\"; fi'"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "command": "bash .claude/scripts/guard-contracts.sh"
+      },
+      {
+        "command": "bash .claude/scripts/guard-import-dag.sh"
+      },
+      {
+        "command": "bash .claude/scripts/guard-core-delete.sh"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "command": "bash .claude/scripts/gate-lint.sh"
+      },
+      {
+        "command": "bash .claude/scripts/gate-test.sh"
+      },
+      {
+        "command": "bash .claude/scripts/gate-protocol.sh"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "command": "bash -c 'INPUT=$(cat); TOOL=$(echo \"$INPUT\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get(\\\"tool_name\\\",\\\"\\\"))\" 2>/dev/null); [ -z \"$TOOL\" ] && TOOL=\"$HOOK_TOOL_NAME\"; OUTPUT=$(echo \"$INPUT\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get(\\\"tool_output\\\",\\\"\\\"))\" 2>/dev/null); if [ \"$TOOL\" = \"Bash\" ] && echo \"$OUTPUT\" | grep -qiE \"FAILED|ERROR|failures\"; then echo \"[TEST FAILURE] Detected test failure. Check the most recently edited file. Failing output:\"; echo \"$OUTPUT\" | grep -E \"FAILED|AssertionError|ERROR\" | head -5; fi'"
+      }
+    ],
+    "Stop": [
+      {
+        "command": "echo '[SESSION END] Check if any new patterns were discovered (import violations, test failures, convention breaks). Update relevant feedback memory files in .claude/memory/ if needed.'"
+      }
+    ]
+  }
+}

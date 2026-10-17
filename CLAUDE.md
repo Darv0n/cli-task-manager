@@ -1,116 +1,99 @@
 # cli-task-manager
 
-Production-grade CLI task manager. Pluggable storage, plugin system, TOML config.
+Production CLI task manager. Pluggable storage, plugin system, TOML config.
 
 ## Quick Reference
 
 ```bash
-# Dev setup
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
-
-# Run
-.venv/Scripts/python.exe -m task_manager [command]
-
-# Lint + test
-.venv/Scripts/ruff.exe check src/ tests/
-.venv/Scripts/ruff.exe format src/ tests/
-.venv/Scripts/python.exe -m pytest tests/ -q
+.venv/Scripts/python.exe -m task_manager [command]        # run
+.venv/Scripts/ruff.exe check src/ tests/                  # lint
+.venv/Scripts/ruff.exe format src/ tests/                 # format
+.venv/Scripts/python.exe -m pytest tests/ -q              # test (82, 0.4s)
 ```
 
 ## Architecture
 
-### Dependency Flow (strict — no cycles)
+### Dependency DAG (strict -- NEVER import upward)
 
 ```
-contracts.py          <- single source of truth: enums, protocols, type aliases
+contracts.py  <- enums, protocols, type aliases (SINGLE SOURCE OF TRUTH)
     |
-errors.py             <- error hierarchy with structured exit codes
-utils/                <- ids (ULID), time (ISO 8601), filters (predicates)
+errors.py     <- error hierarchy, structured exit codes
+utils/        <- ids (ULID), time (ISO 8601), filters
     |
-models.py             <- Pydantic v2 Task model (imports contracts + utils)
-config.py             <- frozen Settings dataclass (imports contracts)
+models.py     <- Pydantic v2 Task model
+config.py     <- frozen Settings dataclass
     |
-storage/              <- registry + JSON backend + SQLite backend
-plugins/              <- hook registry + directory-based loader
+storage/      <- registry + JSON + SQLite backends
+plugins/      <- hook registry + directory loader
     |
-cli/                  <- Typer app, commands, output formatters, validators
+cli/          <- Typer app, commands, formatters
 ```
+
+### Task Lifecycle
+
+```
+OPEN --update--> IN_PROGRESS --complete--> DONE
+  |                   |
+  +----cancel---------+----cancel----> CANCELLED
+  |
+  +----complete--> DONE
+```
+
+No transition enforcement (V1). Any status reachable via `update --status`.
+`complete` = sugar for `update --status=done`. `delete` removes from any state.
 
 ### Load-Bearing Decisions
 
-| Decision | Choice | Why it matters |
-|----------|--------|----------------|
-| Types | `contracts.py` is the only file that defines types | Single source of truth — everything else imports from here |
-| Model | Pydantic v2 | Validation at parse time, not storage time. Free serialization. |
-| Storage | `Protocol` (structural subtyping) | Plugins implement storage without importing our code |
-| IDs | ULID (pure Python, `utils/ids.py`) | Time-sortable, prefix-matchable for CLI UX, zero deps |
-| Config | `tomllib` (stdlib) + frozen dataclass | No deps. Env vars > TOML > defaults. Immutable after load. |
-| Plugins | Directory-based (`~/.task-manager/plugins/*.py`) | Zero friction. Drop a file, it loads. |
-| Errors | Named for structural cause, not symptom | `TaskNotFound` not `TaskLookupError`. Exit codes per category. |
+| Decision | Choice | Constraint |
+|----------|--------|------------|
+| Types | `contracts.py` only | Everything imports from here |
+| Storage | `Protocol` (structural subtyping) | 7 methods, self-registering |
+| IDs | ULID (pure Python) | Time-sorted, prefix-matchable |
+| Config | `tomllib` + frozen dataclass | env > TOML > defaults, immutable |
+| Plugins | `~/.task-manager/plugins/*.py` | Expose `plugin` var, `register(hooks)` |
+| Errors | Named for structural cause | `TaskNotFound` not `TaskLookupError` |
 
-### Storage Backends
-
-Both backends implement `StorageBackend` Protocol from `contracts.py` and self-register via `register_backend()` at import time.
-
-- **JSON** (`storage/json_backend.py`): Single file at `data_dir/tasks.json`. Atomic writes via `.tmp` + `replace()`.
-- **SQLite** (`storage/sqlite_backend.py`): WAL mode, indexed on status/priority/project. Tags stored as JSON text.
-
-### CLI Commands
+## CLI Commands
 
 `add`, `list`, `show`, `update`, `delete`, `complete`, `tag`, `search`, `config`
 
-All commands resolve task IDs by prefix match (`task show 01KJ` works). Ambiguous prefixes raise `AmbiguousTaskId`.
+Prefix resolution: `task show 01KJ` works. Ambiguous = `AmbiguousTaskId`.
+Delete in agent context: always pass `--force` (no interactive prompt).
 
-### Plugin System
+## Storage Backends
 
-- `plugins/hooks.py`: `DefaultHookRegistry` — synchronous event bus. Handlers get a deepcopy of payload. Exceptions caught and logged to stderr.
-- `plugins/loader.py`: Scans `plugins_dir/*.py`, looks for `plugin` variable implementing `Plugin` protocol.
-- Hook events: `task.created`, `task.updated`, `task.deleted`, `task.completed`, `before.list`
+- **JSON**: `data_dir/tasks.json`. Atomic writes (`.tmp` + `replace()`).
+- **SQLite**: WAL mode, indexed status/priority/project. Tags as JSON text.
+
+New backends: implement all 7 `StorageBackend` Protocol methods + `register_backend()`.
+
+## Plugin System
+
+- `hooks.py`: Sync event bus. Handlers get deepcopy. Exceptions caught/logged.
+- `loader.py`: Scans `plugins_dir/*.py` for `plugin` var implementing `Plugin` protocol.
+- Events: `task.created`, `task.updated`, `task.deleted`, `task.completed`, `before.list`
 
 ## Conventions
 
-- Python 3.11+ (uses `TypeAlias`, not `type` statement)
-- ruff: line-length 100, select E/F/I/N/W, ignore N818
-- Tests use `tmp_path` fixtures — never touch real `~/.task-manager/`
-- CLI tests use `CliRunner` with `--data-dir` and `--no-plugins` for isolation
-- Protocol compliance suite (`test_storage_protocol.py`) parametrizes both backends
+- Python 3.11+, ruff (E/F/I/N/W, line-length 100, ignore N818)
+- Tests: `tmp_path` fixtures, `--data-dir` + `--no-plugins` for CLI isolation
+- Protocol compliance: `test_storage_protocol.py` parametrizes both backends
 
-## File Map
+## Skills & Agents
 
-```
-src/task_manager/
-  __init__.py              # __version__
-  __main__.py              # python -m entry
-  contracts.py             # enums, protocols, type aliases
-  models.py                # Task (Pydantic v2)
-  config.py                # Settings + TOML loader
-  errors.py                # error hierarchy
-  cli/
-    app.py                 # root Typer app + global options + command registration
-    commands/{add,list_,show,update,delete,complete,tag,search,config_cmd}.py
-    output.py              # Rich formatters (table + detail view)
-    validators.py          # due date parsing (natural language + ISO)
-  storage/
-    __init__.py            # backend registry
-    json_backend.py
-    sqlite_backend.py
-  plugins/
-    hooks.py               # DefaultHookRegistry
-    loader.py              # directory scanner + importlib
-  utils/
-    ids.py                 # ULID generation
-    time.py                # utcnow_iso()
-    filters.py             # apply_filters() shared by backends
-tests/
-  conftest.py              # fixtures: tmp dirs, sample tasks, backends
-  test_models.py           # 15 tests: creation, tags, sigils, serialization
-  test_ids.py              # ULID length, uniqueness, sortability, charset
-  test_filters.py          # 8 tests: all filter combinations
-  test_config.py           # defaults, env override, validation
-  test_storage_json.py     # JSON backend CRUD + filters
-  test_storage_sqlite.py   # SQLite backend CRUD + filters
-  test_storage_protocol.py # both backends pass identical compliance suite
-  test_cli_add.py          # CLI add command
-  test_cli_list.py         # CLI list command
-  test_plugins.py          # hook registry, isolation, loader
-```
+Skills: `/add-task`, `/list-tasks`, `/show-task`, `/update-task`, `/complete-task`,
+`/tag-task`, `/search-tasks`, `/delete-task`, `/task-config`, `/sync-github`,
+`/add-backend`, `/add-plugin`, `/task-dashboard`, `/run-checks`
+
+Agents: `backend-architect` (opus), `plugin-architect` (sonnet),
+`github-sync-agent` (sonnet), `test-author` (sonnet),
+`code-reviewer` (sonnet), `integration-scout` (haiku)
+
+## Hooks
+
+PreToolUse: contracts.py edit guard, import DAG guard, core module delete guard
+PostToolUse: lint gate, test gate, Protocol compliance gate
+PostToolUseFailure: test failure parser
+UserPromptSubmit: task intent router
+Stop: session learning capture
